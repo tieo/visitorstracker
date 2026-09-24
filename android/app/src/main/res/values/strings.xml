@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Appointments</string>
+    <!-- The launcher label; the home screen cuts longer names off. -->
+    <string name="app_name">Termin-Tracker</string>
+    <string name="app_title">Behörden-Termin-Tracker Ulm/Ehingen</string>
 </resources>

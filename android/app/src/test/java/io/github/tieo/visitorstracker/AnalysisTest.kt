@@ -67,8 +67,46 @@ class AnalysisTest {
     }
 
     @Test
-    fun cellsUseBerlinLocalTime() {
-        assertEquals(CellKey(1, 9 * 60), Analysis.key(t0.plusSeconds(20 * 60)))
+    fun releasesAreBoundedByThePollBefore() {
+        val polls = listOf(0L, 15, 30).map { Poll(t0.plusSeconds(it * 60), true, 1, 1, null) }
+        val rows = listOf(
+            row(1, t0, t0, null, t0.plus(Duration.ofDays(10))),
+            row(2, t0.plusSeconds(30 * 60), t0.plusSeconds(30 * 60), null, t0.plus(Duration.ofDays(11))),
+        )
+        val releases = Analysis.releases(polls, rows)
+        assertEquals(1, releases.size)
+        assertEquals(t0.plusSeconds(15 * 60), releases[0].before)
+        assertEquals(LocalDate.of(2026, 10, 16), releases[0].day)
+    }
+
+    @Test
+    fun releaseWindowAroundMidnightDoesNotSplit() {
+        fun at(text: String) = Instant.parse(text)
+        val releases = listOf(
+            Release(LocalDate.of(2026, 10, 9), at("2026-09-24T21:55:00Z"), at("2026-09-24T22:02:00Z")),
+            Release(LocalDate.of(2026, 10, 12), at("2026-09-27T21:58:00Z"), at("2026-09-27T22:04:00Z")),
+            Release(LocalDate.of(2026, 10, 13), at("2026-09-28T22:01:00Z"), at("2026-09-28T22:03:00Z")),
+        )
+        // 23:58 and 00:03 Berlin summer time, not a midnight-straddling average of noon.
+        assertEquals(23 * 60 + 58 to 3, Analysis.releaseWindow(releases))
+    }
+
+    @Test
+    fun easiestDayNeedsEnoughReleasedSlots() {
+        val base = t0.minus(Duration.ofDays(3))
+        fun slots(weekdayOffset: Long, count: Int, bookedAfterHours: Long?) = List(count) {
+            val start = t0.plus(Duration.ofDays(weekdayOffset))
+            Tracked(start, start, "a", base, bookedAfterHours?.let { base.plus(Duration.ofHours(it)) } ?: t0,
+                bookedAfterHours?.let { base.plus(Duration.ofHours(it + 1)) }, true,
+                if (bookedAfterHours == null) Outcome.FREE else Outcome.BOOKED)
+        }
+        val monday = Analysis.survival(slots(0, 24, 1), t0)
+        val tuesday = Analysis.survival(slots(1, 24, null), t0)
+        val wednesday = Analysis.survival(slots(2, 2, null), t0)
+        val insight = Insight(mapOf(1 to monday, 2 to tuesday, 3 to wednesday), emptyMap(), emptyList(), monday, 50, base)
+        assertNull(Insight(mapOf(1 to monday), emptyMap(), emptyList(), monday, 24, base).easiestDay())
+        assertEquals(2, insight.easiestDay())
+        assertEquals(1, insight.hardestDay())
     }
 
     @Test

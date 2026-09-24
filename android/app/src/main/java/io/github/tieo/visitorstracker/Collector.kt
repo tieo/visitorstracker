@@ -55,16 +55,20 @@ object Collector {
     /** Whether a round is in progress, for the pull-to-refresh indicator. */
     val running: StateFlow<Boolean> = runningFlow.asStateFlow()
 
-    suspend fun run(context: Context, offices: List<Office> = OFFICES) = mutex.withLock {
+    /**
+     * One round over [offices]. A [dense] round, run around releases, reads a
+     * flexappoint office only from the day before its newest known day.
+     */
+    suspend fun run(context: Context, offices: List<Office> = OFFICES, dense: Boolean = false) = mutex.withLock {
         runningFlow.value = true
         try {
-            withContext(Dispatchers.IO) { round(context, offices) }
+            withContext(Dispatchers.IO) { round(context, offices, dense) }
         } finally {
             runningFlow.value = false
         }
     }
 
-    private suspend fun round(context: Context, offices: List<Office>) {
+    private suspend fun round(context: Context, offices: List<Office>, dense: Boolean) {
         val store = Store.get(context)
         for (office in offices) {
             val at = Instant.now()
@@ -74,8 +78,17 @@ object Collector {
                 continue
             }
             try {
-                val slots = read(office, Http())
-                val created = store.recordSnapshot(office.id, at, slots, if (slots.isEmpty()) 0 else appointments(slots))
+                val from = if (dense && office is FlexappointOffice) {
+                    store.slots(office.id).maxOfOrNull { it.start }?.atZone(Flexappoint.BERLIN)?.toLocalDate()?.minusDays(1)
+                } else {
+                    null
+                }
+                val slots = when (office) {
+                    is SmartCjmOffice -> SmartCjm.read(office, Http())
+                    is FlexappointOffice -> Flexappoint.read(office, Http(), from)
+                }
+                val coveredFrom = from?.atStartOfDay(Flexappoint.BERLIN)?.toInstant()
+                val created = store.recordSnapshot(office.id, at, slots, if (slots.isEmpty()) 0 else appointments(slots), coveredFrom)
                 notifyAlerts(context, store, office, created, at)
             } catch (error: RateLimited) {
                 val wait = error.retryAfterSeconds?.let { Duration.ofSeconds(it) } ?: DEFAULT_BLOCK
@@ -87,11 +100,6 @@ object Collector {
             }
             delay(PAUSE_MILLIS)
         }
-    }
-
-    private fun read(office: Office, http: Http) = when (office) {
-        is SmartCjmOffice -> SmartCjm.read(office, http)
-        is FlexappointOffice -> Flexappoint.read(office, http)
     }
 
     /**

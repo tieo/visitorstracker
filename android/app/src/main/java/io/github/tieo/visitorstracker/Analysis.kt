@@ -8,7 +8,7 @@ import java.time.Instant
 import java.time.LocalDate
 
 /**
- * Turns the slot history into what the office screen shows.
+ * Turns the slot history into what the office screens show.
  *
  * A slot that vanished was either booked or dropped out of the bookable
  * window. Booking systems stop offering a slot some lead time before it
@@ -35,29 +35,12 @@ data class Tracked(
     val outcome: Outcome,
 )
 
-data class Cell(
-    val median: Double?,
-    val observed: Double,
-    val measured: Int,
-    val booked: Int,
-    val expired: Int,
-    val free: Int,
-)
-
-/** Weekday (1 = Monday) and minute of day, rounded down to [BUCKET_MINUTES]. */
-data class CellKey(val weekday: Int, val minute: Int)
-
-const val BUCKET_MINUTES = 30
-
 data class OfficeState(
     val lastPoll: Poll?,
     val lastOk: Poll?,
     val trackingSince: Instant?,
     val freeNow: Int,
     val nextFree: Instant?,
-    val cells: Map<CellKey, Cell>,
-    val freeByDay: List<Pair<LocalDate, Int>>,
-    val timeline: List<Pair<Instant, Int>>,
 )
 
 object Analysis {
@@ -113,34 +96,13 @@ object Analysis {
         return null to samples.last().first
     }
 
-    fun key(moment: Instant): CellKey {
-        val local = moment.atZone(BERLIN)
-        val minute = local.hour * 60 + local.minute
-        return CellKey(local.dayOfWeek.value, minute - minute % BUCKET_MINUTES)
-    }
-
-    fun cells(slots: List<Tracked>, now: Instant): Map<CellKey, Cell> =
-        slots.groupBy { key(it.start) }.mapValues { (_, members) ->
-            val (median, observed) = medianHoursToBooking(members, now)
-            Cell(median, observed, members.count { it.releasedInView },
-                members.count { it.outcome == Outcome.BOOKED },
-                members.count { it.outcome == Outcome.EXPIRED },
-                members.count { it.outcome == Outcome.FREE })
-        }
-
     fun freeAppointments(slots: List<Tracked>): Int {
         val free = slots.filter { it.outcome == Outcome.FREE }.map { Slot(it.start, it.end, it.resource) }
         return if (free.isEmpty()) 0 else appointments(free)
     }
 
-    fun freeByDay(slots: List<Tracked>): List<Pair<LocalDate, Int>> =
-        slots.filter { it.outcome == Outcome.FREE }
-            .groupBy { it.start.atZone(BERLIN).toLocalDate() }
-            .map { (day, group) -> day to freeAppointments(group) }
-            .sortedBy { it.first }
-
     fun state(polls: List<Poll>, rows: List<SlotRow>, now: Instant): OfficeState {
-        val ok = polls.filter { it.ok }
+        val ok = polls.filter { it.ok && !it.partial }
         val slots = tracked(rows, ok.firstOrNull()?.at, now)
         val free = slots.filter { it.outcome == Outcome.FREE }
         return OfficeState(
@@ -149,11 +111,17 @@ object Analysis {
             trackingSince = ok.firstOrNull()?.at,
             freeNow = freeAppointments(free),
             nextFree = free.minOfOrNull { it.start },
-            cells = cells(slots, now),
-            freeByDay = freeByDay(slots),
-            timeline = ok.mapNotNull { poll -> poll.appointments?.let { poll.at to it } },
         )
     }
+
+    fun freeDays(rows: List<SlotRow>, now: Instant): List<FreeDay> =
+        rows.filter { it.goneSeen == null && it.start.isAfter(now) }
+            .groupBy { it.start.atZone(BERLIN).toLocalDate() }
+            .map { (day, group) ->
+                FreeDay(day, appointments(group.map { Slot(it.start, it.end, it.resource) }),
+                    group.minOf { it.start }, group.maxOf { it.start })
+            }
+            .sortedBy { it.day }
 
     /** Free appointments starting on or before [until], and the earliest start. */
     fun freeUntil(open: List<SlotRow>, until: LocalDate, now: Instant): Pair<Int, Instant?> {
@@ -163,4 +131,110 @@ object Analysis {
     }
 
     private fun hours(from: Instant, to: Instant) = Duration.between(from, to).toMillis() / 3_600_000.0
+
+    /** How long slots of a group stay free after release. */
+    fun survival(slots: List<Tracked>, now: Instant): Survival {
+        val (median, observed) = medianHoursToBooking(slots, now)
+        val watched = slots.filter { it.releasedInView }
+        return Survival(median, observed, watched.size, watched.count { it.outcome == Outcome.BOOKED })
+    }
+
+    /**
+     * The office's answer to "which day and which time": survival by weekday
+     * of the appointment and by hour within each weekday, plus when new days
+     * get released.
+     */
+    fun insight(polls: List<Poll>, rows: List<SlotRow>, now: Instant): Insight {
+        val ok = polls.filter { it.ok }
+        val slots = tracked(rows, ok.firstOrNull { !it.partial }?.at, now)
+        val local = { slot: Tracked -> slot.start.atZone(BERLIN) }
+        val byWeekday = slots.groupBy { local(it).dayOfWeek.value }.mapValues { survival(it.value, now) }
+        val byHour = slots.groupBy { local(it).dayOfWeek.value }.mapValues { (_, day) ->
+            day.groupBy { local(it).hour }.mapValues { survival(it.value, now) }
+        }
+        return Insight(byWeekday, byHour, releases(ok, rows), survival(slots, now),
+            slots.count { it.releasedInView }, ok.firstOrNull()?.at)
+    }
+
+    /**
+     * Days that appeared while the office was watched. A day's release lies
+     * between the last poll without it and the first poll with it.
+     */
+    fun releases(okPolls: List<Poll>, rows: List<SlotRow>): List<Release> {
+        val first = okPolls.firstOrNull()?.at ?: return emptyList()
+        val times = okPolls.map { it.at }
+        return rows.groupBy { it.start.atZone(BERLIN).toLocalDate() }
+            .mapNotNull { (day, group) ->
+                val seen = group.minOf { it.firstSeen }
+                if (seen == first) return@mapNotNull null
+                val before = times.lastOrNull { it.isBefore(seen) } ?: return@mapNotNull null
+                Release(day, before, seen)
+            }
+            .sortedBy { it.seen }
+    }
+
+    /**
+     * The usual release time as minutes after local midnight: the median of
+     * the latest bound across recent releases, with the earliest bound, so a
+     * dense watch can cover the whole span.
+     */
+    fun releaseWindow(releases: List<Release>, recent: Int = 7): Pair<Int, Int>? {
+        val last = releases.takeLast(recent).filter { Duration.between(it.before, it.seen) < Duration.ofHours(3) }
+        if (last.isEmpty()) return null
+        fun minute(at: Instant) = at.atZone(BERLIN).let { it.hour * 60 + it.minute }
+        // Around midnight a plain median of minutes would split 23:58 and 00:02; shift by twelve hours first.
+        fun median(values: List<Int>): Int {
+            val shifted = values.map { (it + 720) % 1440 }.sorted()
+            return (shifted[shifted.size / 2] + 720) % 1440
+        }
+        return median(last.map { minute(it.before) }) to median(last.map { minute(it.seen) })
+    }
+}
+
+/** Half of the slots were booked after [medianHours]; null while more than half are still free after [observedHours]. */
+data class Survival(val medianHours: Double?, val observedHours: Double, val released: Int, val booked: Int) {
+    /** Enough released slots to say anything. */
+    val known: Boolean get() = released >= MIN_RELEASED
+
+    /** Hours the slots last, as far as measured; a lower bound while [medianHours] is null. */
+    val hours: Double get() = medianHours ?: observedHours
+
+    companion object {
+        const val MIN_RELEASED = 20
+    }
+}
+
+data class Release(val day: LocalDate, val before: Instant, val seen: Instant)
+
+/** One appointment day with free time: how many appointments fit, and the first and last free start. */
+data class FreeDay(val day: LocalDate, val appointments: Int, val first: Instant, val last: Instant)
+
+data class Insight(
+    val byWeekday: Map<Int, Survival>,
+    val byHour: Map<Int, Map<Int, Survival>>,
+    val releases: List<Release>,
+    val overall: Survival,
+    val released: Int,
+    val since: Instant?,
+) {
+    /**
+     * The weekday whose slots last longest, and the one whose go fastest. A
+     * ranking needs at least two groups with enough released slots; one group
+     * alone is no comparison.
+     */
+    fun easiestDay(): Int? = easiest(byWeekday)
+    fun hardestDay(): Int? = hardest(byWeekday)
+    fun easiestHour(weekday: Int): Int? = easiest(byHour[weekday].orEmpty())
+    fun hardestHour(weekday: Int): Int? = hardest(byHour[weekday].orEmpty())
+
+    private fun easiest(groups: Map<Int, Survival>): Int? {
+        val known = groups.filterValues { it.known }
+        return if (known.size < 2) null else known.maxByOrNull { it.value.hours }?.key
+    }
+
+    private fun hardest(groups: Map<Int, Survival>): Int? {
+        val known = groups.filterValues { it.known }
+        if (known.size < 2) return null
+        return known.filterValues { it.medianHours != null }.minByOrNull { it.value.hours }?.key
+    }
 }

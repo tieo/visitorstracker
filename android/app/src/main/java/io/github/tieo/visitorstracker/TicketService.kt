@@ -33,6 +33,8 @@ data class TicketState(
     val checkedAt: Long? = null,
     val ended: Boolean = false,
     val error: String? = null,
+    /** The position at the first reading, so the queue's progress can be shown. */
+    val startPosition: Int? = null,
 )
 
 /**
@@ -112,7 +114,8 @@ class TicketService : Service() {
                 stop(clear = true)
                 return
             }
-            ticket = TicketState(url, number, status, System.currentTimeMillis())
+            ticket = TicketState(url, number, status, System.currentTimeMillis(),
+                startPosition = ticket.startPosition ?: status.position)
             show(ongoing(ticket))
             if (status.waiting && !announcedSoon && (status.position ?: Int.MAX_VALUE) <= SOON) {
                 announcedSoon = true
@@ -210,6 +213,11 @@ class TicketService : Service() {
             ContextCompat.startForegroundService(
                 context, Intent(context, TicketService::class.java).putExtra(EXTRA_URL, url),
             )
+        }
+
+        /** Debug builds only: shows a sample ticket so the waiting screen can be checked without a queue. */
+        fun preview(state: TicketState) {
+            if (BuildConfig.DEBUG) tracked.value = state
         }
 
         fun stop(context: Context) {

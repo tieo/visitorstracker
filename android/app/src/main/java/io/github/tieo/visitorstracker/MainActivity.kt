@@ -35,6 +35,10 @@ import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material3.CardDefaults
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -124,6 +128,14 @@ class MainActivity : ComponentActivity() {
             TAB_ALERTS -> tab.intValue = 1
             TAB_TICKET -> tab.intValue = 2
         }
+        if (BuildConfig.DEBUG) {
+            intent.getStringExtra("preview_ticket")?.split(",")?.let { (position, count, start) ->
+                TicketService.preview(TicketState("preview", "E137",
+                    TicketStatus("waiting", position.toInt(), count.toInt(), "29", "12"),
+                    System.currentTimeMillis(), startPosition = start.toInt()))
+                tab.intValue = 2
+            }
+        }
         if (intent.action == Intent.ACTION_SEND) {
             val url = intent.getStringExtra(Intent.EXTRA_TEXT)?.let(Ticket::findUrl) ?: return
             TicketService.start(this, url)
@@ -152,28 +164,17 @@ class MainActivity : ComponentActivity() {
 private fun AppTheme(content: @Composable () -> Unit) {
     val scheme = if (isSystemInDarkTheme()) {
         darkColorScheme(primary = Color(0xFF6DA7EC), background = Color(0xFF0D0D0D), surface = Color(0xFF0D0D0D),
-            surfaceContainerHighest = Color(0xFF1A1A19))
+            surfaceContainerHighest = Color(0xFF1A1A19), surfaceContainer = Color(0xFF141413), primaryContainer = Color(0xFF104281),
+            onPrimaryContainer = Color(0xFFFFFFFF), secondaryContainer = Color(0xFF184F95))
     } else {
         lightColorScheme(primary = Color(0xFF2A78D6), background = Color(0xFFF9F9F7), surface = Color(0xFFF9F9F7),
-            surfaceContainerHighest = Color(0xFFF0EFEC))
+            surfaceContainerHighest = Color(0xFFF0EFEC), surfaceContainer = Color(0xFFF2F1EE), primaryContainer = Color(0xFFCDE2FB),
+            onPrimaryContainer = Color(0xFF0D366B), secondaryContainer = Color(0xFFCDE2FB))
     }
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
 private val dayFormat = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
-
-/** Everything one office screen shows, recomputed whenever the store changes. */
-@Composable
-private fun officeState(office: Office): OfficeState? {
-    val context = LocalContext.current
-    val version by Store.changes.collectAsState()
-    return produceState<OfficeState?>(null, office.id, version) {
-        value = withContext(Dispatchers.IO) {
-            val store = Store.get(context)
-            Analysis.state(store.polls(office.id), store.slots(office.id), Instant.now())
-        }
-    }.value
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -199,11 +200,12 @@ private fun App(tab: MutableIntState, sharedTicket: MutableState<String?>) {
 
     var editingPolling by remember { mutableStateOf(false) }
     if (editingPolling) PollingDialog { editingPolling = false }
-    val titles = listOf("Offices", "Alerts", "Walk-in")
+    val titles = listOf(androidx.compose.ui.res.stringResource(R.string.app_title), "Alerts", "Walk-in")
+    val tabs = listOf("Offices", "Alerts", "Walk-in")
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(titles[tab.intValue]) },
+                title = { Text(titles[tab.intValue], style = MaterialTheme.typography.titleMedium) },
                 actions = {
                     IconButton(onClick = { editingPolling = true }) {
                         Icon(Icons.Filled.Settings, contentDescription = "Polling settings")
@@ -219,7 +221,7 @@ private fun App(tab: MutableIntState, sharedTicket: MutableState<String?>) {
                             selected = tab.intValue == index,
                             onClick = { tab.intValue = index },
                             icon = { Icon(icon, contentDescription = null) },
-                            label = { Text(titles[index]) },
+                            label = { Text(tabs[index]) },
                         )
                     }
             }
@@ -230,115 +232,6 @@ private fun App(tab: MutableIntState, sharedTicket: MutableState<String?>) {
             0 -> OfficesScreen(modifier) { openOffice = it }
             1 -> AlertsScreen(modifier)
             else -> TicketScreen(modifier, sharedTicket)
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun OfficesScreen(modifier: Modifier, onOpen: (Office) -> Unit) {
-    val context = LocalContext.current
-    val running by Collector.running.collectAsState()
-    PullToRefreshBox(isRefreshing = running, onRefresh = { Collector.runNow(context) }, modifier = modifier.fillMaxSize()) {
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            items(OFFICES, key = { it.id }) { office ->
-                val state = officeState(office)
-                Card(Modifier.fillMaxWidth().clickable { onOpen(office) }) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(office.name, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                when {
-                                    state?.lastOk == null -> "not read yet"
-                                    state.nextFree != null -> "next " + Collector.format(state.nextFree)
-                                    else -> "nothing free"
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            if (state?.lastPoll?.ok == false) {
-                                Text("⚠ last poll failed", style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                        Text(state?.lastOk?.let { "${state.freeNow}" } ?: "–", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun ago(moment: Instant?, now: Instant): String {
-    if (moment == null) return "never"
-    val minutes = Duration.between(moment, now).toMinutes()
-    return when {
-        minutes < 1 -> "just now"
-        minutes < 60 -> "$minutes min ago"
-        minutes < 48 * 60 -> "${minutes / 60} h ago"
-        else -> "${minutes / 1440} days ago"
-    }
-}
-
-@Composable
-private fun OfficeScreen(office: Office, modifier: Modifier) {
-    val state = officeState(office) ?: return
-    val now = Instant.now()
-    Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            office.authority + (state.trackingSince?.let { " · watched since " + Collector.format(it) } ?: ""),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
-            Tile("Free now", "${state.freeNow}", "appointments", Modifier.weight(1f).fillMaxHeight())
-            Tile("Next free", state.nextFree?.let(Collector::format) ?: "–", null, Modifier.weight(1f).fillMaxHeight())
-        }
-        val last = state.lastPoll
-        Tile(
-            "Last poll",
-            when {
-                last == null -> "–"
-                last.ok -> ago(last.at, now)
-                else -> "⚠ failed"
-            },
-            if (last != null && !last.ok) "${last.error.orEmpty()} · last success ${ago(state.lastOk?.at, now)}" else last?.at?.let(Collector::format),
-            Modifier.fillMaxWidth(),
-        )
-        Section("How fast slots go", "Time from release until half of the start times are booked, by weekday and time of the appointment") {
-            Heatmap(state.cells)
-        }
-        Section("What is left", "Free appointments per day") { DayBars(state.freeByDay) }
-        Section("Free appointments over time", "Number of free appointments at each poll") { Timeline(state.timeline) }
-    }
-}
-
-@Composable
-private fun Tile(label: String, value: String, note: String?, modifier: Modifier) {
-    Card(modifier) {
-        Column(Modifier.padding(14.dp)) {
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-    }
-}
-
-@Composable
-private fun Section(title: String, subtitle: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(10.dp))
-            content()
         }
     }
 }
@@ -420,7 +313,9 @@ private fun AlertsScreen(modifier: Modifier) {
         // The outer scaffold already keeps clear of the system bars.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
-            FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "New alert") }
+            if (alerts.isNotEmpty()) {
+                FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "New alert") }
+            }
         },
     ) { inner ->
         LazyColumn(
@@ -428,6 +323,21 @@ private fun AlertsScreen(modifier: Modifier) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.padding(inner).fillMaxSize(),
         ) {
+            if (alerts.isEmpty()) {
+                item {
+                    Column(Modifier.fillMaxWidth().padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Icon(Icons.Filled.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(48.dp))
+                        Text("No alerts", style = MaterialTheme.typography.titleLarge)
+                        Button(onClick = { adding = true }, modifier = Modifier.height(48.dp)) {
+                            Icon(Icons.Filled.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("New alert")
+                        }
+                    }
+                }
+            }
             items(alerts, key = { it.alert.id }) { view ->
                 Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -530,52 +440,106 @@ private fun NewAlertDialog(offices: List<Office>, onDismiss: () -> Unit, onCreat
 }
 
 @Composable
-private fun TicketScreen(modifier: Modifier, sharedTicket: androidx.compose.runtime.MutableState<String?>) {
+private fun TicketScreen(modifier: Modifier, sharedTicket: MutableState<String?>) {
     val state by TicketService.current.collectAsState()
     val context = LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var link by remember { mutableStateOf(sharedTicket.value.orEmpty()) }
+    val ticket = state
 
     Column(
-        modifier.fillMaxSize().padding(24.dp),
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        val ticket = state
-        if (ticket != null) {
-            val status = ticket.status
-            Text(ticket.number ?: "Ticket", fontSize = 44.sp, fontWeight = FontWeight.SemiBold)
-            when {
-                ticket.ended -> Text("Closed", fontSize = 22.sp)
-                status == null -> Text(ticket.error ?: "Checking…", fontSize = 22.sp)
-                status.waiting -> {
-                    Text("Position ${status.position} of ${status.waitingCount}", fontSize = 26.sp)
-                    Text(
-                        "average wait ${status.averageWait} min · waiting ${status.waited} min",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                else -> Text("Called", fontSize = 26.sp, color = MaterialTheme.colorScheme.primary)
-            }
-            ticket.error?.takeIf { status != null }?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = {
-                TicketService.stop(context)
-                sharedTicket.value = null
-                link = ""
-            }) { Text(if (ticket.ended) "Done" else "Stop") }
-        } else {
+        if (ticket == null) {
+            Spacer(Modifier.height(24.dp))
+            Icon(Icons.Filled.ConfirmationNumber, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(48.dp).align(Alignment.CenterHorizontally))
+            Text("Follow a walk-in ticket", style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.align(Alignment.CenterHorizontally))
             val url = Ticket.findUrl(link)
             OutlinedTextField(
                 value = link,
                 onValueChange = { link = it },
                 label = { Text("Ticket link") },
+                singleLine = true,
                 isError = link.isNotBlank() && url == null,
+                trailingIcon = {
+                    IconButton(onClick = { clipboard.getText()?.text?.let { link = it } }) {
+                        Icon(Icons.Filled.ContentPaste, contentDescription = "Paste")
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Button(enabled = url != null, onClick = { url?.let { TicketService.start(context, it) } }) {
-                Text("Follow")
+            Button(
+                enabled = url != null,
+                onClick = { url?.let { TicketService.start(context, it) } },
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+            ) { Text("Follow") }
+            return@Column
+        }
+
+        val status = ticket.status
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(ticket.number ?: "Ticket", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer)
+                when {
+                    ticket.ended -> BigLine("Closed")
+                    status == null -> BigLine(ticket.error ?: "Checking…")
+                    status.waiting -> {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text("${status.position}", fontSize = 64.sp, fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(" of ${status.waitingCount} waiting", style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.padding(bottom = 14.dp))
+                        }
+                        val start = ticket.startPosition
+                        val position = status.position
+                        if (start != null && position != null && start > 0) {
+                            Meter(1f - position.toFloat() / start)
+                        }
+                    }
+                    else -> BigLine("Called")
+                }
             }
+        }
+        if (status != null && status.waiting) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
+                TicketFact("Average wait", "${status.averageWait} min", Modifier.weight(1f).fillMaxHeight())
+                TicketFact("You waited", "${status.waited} min", Modifier.weight(1f).fillMaxHeight())
+            }
+        }
+        ticket.checkedAt?.let {
+            Text(
+                "Checked " + java.time.Instant.ofEpochMilli(it).atZone(io.github.tieo.visitorstracker.source.Flexappoint.BERLIN)
+                    .format(DateTimeFormatter.ofPattern("HH:mm:ss")) + (ticket.error?.takeIf { status != null }?.let { " · $it" } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        OutlinedButton(
+            onClick = {
+                TicketService.stop(context)
+                sharedTicket.value = null
+                link = ""
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (ticket.ended) "Done" else "Stop following") }
+    }
+}
+
+@Composable
+private fun BigLine(text: String) {
+    Text(text, fontSize = 40.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+}
+
+@Composable
+private fun TicketFact(label: String, value: String, modifier: Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(14.dp)) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

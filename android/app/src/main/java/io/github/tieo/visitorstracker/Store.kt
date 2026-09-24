@@ -10,7 +10,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.time.Instant
 
-data class Poll(val at: Instant, val ok: Boolean, val free: Int?, val appointments: Int?, val error: String?)
+/** One read of an office; [partial] reads covered only its newest days. */
+data class Poll(
+    val at: Instant,
+    val ok: Boolean,
+    val free: Int?,
+    val appointments: Int?,
+    val error: String?,
+    val partial: Boolean = false,
+)
 
 /** A slot's free stretch: first and last poll showing it, and the first poll no longer showing it. */
 data class SlotRow(
@@ -34,7 +42,7 @@ data class LocalAlert(val id: Long, val office: String, val until: String)
  * like a rush of bookings. Times are epoch milliseconds.
  */
 class Store private constructor(context: Context) :
-    SQLiteOpenHelper(context, "slots.db", null, 1) {
+    SQLiteOpenHelper(context, "slots.db", null, 2) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -42,7 +50,7 @@ class Store private constructor(context: Context) :
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE polls (id INTEGER PRIMARY KEY, office TEXT NOT NULL, at INTEGER NOT NULL, ok INTEGER NOT NULL, free INTEGER, appointments INTEGER, error TEXT)")
+        db.execSQL("CREATE TABLE polls (id INTEGER PRIMARY KEY, office TEXT NOT NULL, at INTEGER NOT NULL, ok INTEGER NOT NULL, free INTEGER, appointments INTEGER, error TEXT, partial INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE INDEX polls_office_at ON polls (office, at)")
         db.execSQL("CREATE TABLE slots (id INTEGER PRIMARY KEY, office TEXT NOT NULL, start INTEGER NOT NULL, `end` INTEGER NOT NULL, resource TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, gone_seen INTEGER)")
         db.execSQL("CREATE INDEX slots_open ON slots (office, gone_seen)")
@@ -51,7 +59,9 @@ class Store private constructor(context: Context) :
         db.execSQL("CREATE TABLE alert_hits (alert INTEGER NOT NULL REFERENCES alerts (id) ON DELETE CASCADE, slot INTEGER NOT NULL, PRIMARY KEY (alert, slot))")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE polls ADD COLUMN partial INTEGER NOT NULL DEFAULT 0")
+    }
 
     fun recordFailure(office: String, at: Instant, error: String) {
         writableDatabase.insert("polls", null, ContentValues().apply {
@@ -61,19 +71,24 @@ class Store private constructor(context: Context) :
     }
 
     /** Stores one successful poll and returns the ids of newly free slots. */
-    fun recordSnapshot(office: String, at: Instant, slots: List<Slot>, appointments: Int): List<Long> {
+    fun recordSnapshot(office: String, at: Instant, slots: List<Slot>, appointments: Int, coveredFrom: Instant? = null): List<Long> {
         val now = at.toEpochMilli()
         val seen = slots.associateBy { it.start.toEpochMilli() to it.resource }
         val created = mutableListOf<Long>()
         val db = writableDatabase
         db.beginTransaction()
         try {
+            // A partial read says nothing about the days it skipped: it only closes slots inside
+            // the range it covered, and its poll is marked so counts over the whole office skip it.
             db.insert("polls", null, ContentValues().apply {
                 put("office", office); put("at", now); put("ok", 1)
                 put("free", seen.size); put("appointments", appointments)
+                put("partial", if (coveredFrom == null) 0 else 1)
             })
             val stillOpen = mutableSetOf<Pair<Long, String>>()
-            db.rawQuery("SELECT id, start, resource FROM slots WHERE office = ? AND gone_seen IS NULL", arrayOf(office)).use { c ->
+            val floor = coveredFrom?.toEpochMilli() ?: Long.MIN_VALUE
+            db.rawQuery("SELECT id, start, resource FROM slots WHERE office = ? AND gone_seen IS NULL AND start >= ?",
+                arrayOf(office, floor.toString())).use { c ->
                 while (c.moveToNext()) {
                     val key = c.getLong(1) to c.getString(2)
                     val column = if (key in seen) "last_seen" else "gone_seen"
@@ -116,13 +131,13 @@ class Store private constructor(context: Context) :
 
     fun polls(office: String): List<Poll> =
         readableDatabase.rawQuery(
-            "SELECT at, ok, free, appointments, error FROM polls WHERE office = ? ORDER BY at", arrayOf(office),
+            "SELECT at, ok, free, appointments, error, partial FROM polls WHERE office = ? ORDER BY at", arrayOf(office),
         ).use { c ->
             buildList {
                 while (c.moveToNext()) {
                     add(Poll(Instant.ofEpochMilli(c.getLong(0)), c.getInt(1) == 1,
                         if (c.isNull(2)) null else c.getInt(2), if (c.isNull(3)) null else c.getInt(3),
-                        if (c.isNull(4)) null else c.getString(4)))
+                        if (c.isNull(4)) null else c.getString(4), c.getInt(5) == 1))
                 }
             }
         }

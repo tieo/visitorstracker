@@ -14,6 +14,7 @@ object Notifications {
     const val WATCH = "alert_watch"
     const val TICKET_ID = 1
     const val WATCH_ID = 3
+    const val RELEASE_ID = 4
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)

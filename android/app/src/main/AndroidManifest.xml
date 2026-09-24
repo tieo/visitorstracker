@@ -49,6 +49,15 @@
                 android:value="Checks public appointment calendars every few minutes while the user has an alert set." />
         </service>
 
+        <service
+            android:name=".ReleaseWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Reads public appointment calendars every two minutes while they usually release new days." />
+        </service>
+
         <receiver
             android:name=".BootReceiver"
             android:exported="false">

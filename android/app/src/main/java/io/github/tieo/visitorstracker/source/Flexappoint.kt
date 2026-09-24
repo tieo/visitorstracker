@@ -27,11 +27,15 @@ object Flexappoint {
     val BERLIN: ZoneId = ZoneId.of("Europe/Berlin")
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun read(office: FlexappointOffice, http: Http, pauseMillis: Long = 1000): List<Slot> {
+    /**
+     * Free slots from [from] (today when null) to the horizon. Reading only the
+     * newest days keeps the dense rounds around a release light.
+     */
+    fun read(office: FlexappointOffice, http: Http, from: LocalDate? = null, pauseMillis: Long = 1000): List<Slot> {
         val api = office.url.trimEnd('/') + "/api"
         val service = mapOf("[0][id]" to office.service.toString(), "[0][count]" to "1")
-        val today = LocalDate.now(BERLIN)
-        val last = today.plusDays(office.horizonDays)
+        val today = maxOf(LocalDate.now(BERLIN), from ?: LocalDate.MIN)
+        val last = LocalDate.now(BERLIN).plusDays(office.horizonDays)
 
         val disabled = mutableSetOf<String>()
         var month = today.withDayOfMonth(1)

@@ -16,16 +16,17 @@ import java.util.concurrent.TimeUnit
 /**
  * When the app talks to the booking systems.
  *
- * Nothing polls unless asked to. Background history, off by default, reads
- * every office on a slow WorkManager schedule. An active event polls
+ * Background history, on by default and switchable in the app, reads every
+ * office on a slow WorkManager schedule; dense release watches read offices
+ * every two minutes around the time they usually release new days. An active event polls
  * constantly: while an alert exists, [AlertWatchService] checks the offices
  * the alerts name every few minutes; while a walk-in ticket is followed,
  * [TicketService] reads it every 20 seconds.
  */
 data class PollingSettings(
-    val history: Boolean = false,
+    val history: Boolean = true,
     val historyMinutes: Int = 15,
-    val wifiOnly: Boolean = true,
+    val wifiOnly: Boolean = false,
     val alertMinutes: Int = 5,
 )
 
@@ -76,8 +77,13 @@ object Polling {
             work.enqueueUniquePeriodicWork(HISTORY_WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
         } else {
             work.cancelUniqueWork(HISTORY_WORK)
+            ReleasePlanner.cancel(context)
         }
         Thread {
+            if (settings.history) {
+                ReleasePlanner.scheduleNext(context)
+                ReleaseWatchService.startIfDue(context)
+            }
             if (Store.get(context).alerts().isNotEmpty()) AlertWatchService.start(context) else AlertWatchService.stop(context)
         }.start()
     }
