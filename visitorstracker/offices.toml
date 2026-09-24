@@ -1,0 +1,116 @@
+# Offices to poll. Each entry names one calendar and the one service used to
+# ask it for free times. Services of one calendar share the same counters, so
+# the shortest service is chosen: its free start times cover every gap a
+# longer one would fit into.
+
+[[office]]
+id = "lra-kfz-ehingen"
+name = "Kfz-Zulassung Ehingen"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh-fs/extern/calendar/"
+uid = "fd698344-7f8a-4ab8-a9c4-1020378e4655"
+# The wizard only accepts postcodes the location is responsible for.
+zip_code = "89584"
+# Außerbetriebsetzung / Abmeldung, 10 minutes; every other service is 15.
+service = "48f60d85-2adc-4fe9-8f2f-c122028906c1"
+
+[[office]]
+id = "lra-kfz-ulm"
+name = "Kfz-Zulassung Ulm"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh-fs/extern/calendar/"
+uid = "61003675-f85e-4f2b-ab4a-4a29306d5c04"
+zip_code = "89584"
+# Außerbetriebsetzung / Abmeldung, 10 minutes. Joint office of Ulm and the Landkreis.
+service = "19efd142-c5e8-437f-97b1-1e3a8988f9b6"
+
+[[office]]
+id = "lra-kfz-langenau"
+name = "Kfz-Zulassung Langenau"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh-fs/extern/calendar/"
+uid = "72379614-9118-4d1b-b55a-7c5f83de45ed"
+zip_code = "89129"
+# Außerbetriebsetzung / Abmeldung, 10 minutes.
+service = "c95f1e45-6513-42ab-be2b-2833e29196ff"
+
+[[office]]
+id = "lra-fuehrerschein-ehingen"
+name = "Führerscheinstelle Ehingen"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh-fs/extern/calendar/"
+uid = "38bb0462-011f-4331-ada4-c904f6a390d1"
+zip_code = "89584"
+# Abholung Führerschein, 10 minutes.
+service = "f7ed0928-a143-4cca-912f-905850b90087"
+
+[[office]]
+id = "lra-fuehrerschein-ulm"
+name = "Führerscheinstelle Ulm"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh-fs/extern/calendar/"
+uid = "712d84df-ba20-4b64-b718-d00789e6555b"
+zip_code = "89584"
+# Abholung Führerschein, 10 minutes.
+service = "f7ed0928-a143-4cca-912f-905850b90087"
+
+[[office]]
+id = "lra-auslaenderbehoerde-ulm"
+name = "Ausländerbehörde Ulm (Landkreis)"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh/extern/calendar/"
+uid = "d45a683e-595a-4afe-b88e-510dfa0ec13d"
+zip_code = "89597"
+# Abholung eAT, Einzelperson, 15 minutes. The town of Ehingen runs its own office for its residents, hence a Landkreis postcode outside it.
+service = "29ec56c3-f289-4d1a-9f16-014262d51eeb"
+# Standort Ulm in the calendar shared by both locations.
+location = "947037c3-f458-4d4d-9a1e-0b3a8bf53b39"
+
+[[office]]
+id = "lra-auslaenderbehoerde-ehingen"
+name = "Ausländerbehörde Ehingen (Landkreis)"
+authority = "Landratsamt Alb-Donau-Kreis"
+system = "smartcjm"
+url = "https://lra-alb-donau-kreis.saas.smartcjm.com/m/abh/extern/calendar/"
+uid = "d45a683e-595a-4afe-b88e-510dfa0ec13d"
+zip_code = "89597"
+# Abholung eAT, Einzelperson, 15 minutes. The town of Ehingen runs its own office for its residents, hence a Landkreis postcode outside it.
+service = "29ec56c3-f289-4d1a-9f16-014262d51eeb"
+# Standort Ehingen in the calendar shared by both locations.
+location = "d1a57f7e-5127-4fac-bc8e-a89bdad9ed9c"
+
+[[office]]
+id = "ehingen-buergerbuero"
+name = "Bürgerbüro Ehingen"
+authority = "Stadt Ehingen (Donau)"
+system = "flexappoint"
+url = "https://ehingen.flexappoint.de"
+department = 1
+# Meldebescheinigung, 10 minutes on the 15 minute grid.
+service = 8
+
+[[office]]
+id = "ehingen-auslaenderbehoerde"
+name = "Ausländerbehörde Ehingen"
+authority = "Stadt Ehingen (Donau)"
+system = "flexappoint"
+url = "https://ehingen.flexappoint.de"
+department = 2
+# Abholung Fiktionsbescheinigung; every service here takes 20 minutes.
+service = 62
+
+[[office]]
+id = "ehingen-rentenstelle"
+name = "Rentenstelle Ehingen"
+authority = "Stadt Ehingen (Donau)"
+system = "flexappoint"
+url = "https://ehingen.flexappoint.de"
+department = 4
+# Rentenantrag: Altersrente, 105 minutes; the others take 120.
+service = 38
