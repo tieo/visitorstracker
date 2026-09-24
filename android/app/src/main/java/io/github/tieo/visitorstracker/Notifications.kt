@@ -11,7 +11,9 @@ object Notifications {
     const val FREE_SLOTS = "free_slots"
     const val TICKET = "ticket"
     const val TICKET_CALLED = "ticket_called"
+    const val WATCH = "alert_watch"
     const val TICKET_ID = 1
+    const val WATCH_ID = 3
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -21,6 +23,7 @@ object Notifications {
                 // The ongoing queue position: updated every few seconds, so it stays silent.
                 NotificationChannel(TICKET, "Walk-in queue", NotificationManager.IMPORTANCE_LOW),
                 NotificationChannel(TICKET_CALLED, "Walk-in called", NotificationManager.IMPORTANCE_HIGH),
+                NotificationChannel(WATCH, "Alert watch", NotificationManager.IMPORTANCE_LOW),
             ),
         )
     }

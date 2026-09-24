@@ -35,6 +35,11 @@ import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -103,7 +108,7 @@ class MainActivity : ComponentActivity() {
         deleteSharedPreferences("settings")
         Notifications.createChannels(this)
         askForNotifications()
-        Collector.schedule(this)
+        Polling.apply(this)
         if (savedInstanceState == null) Collector.refreshIfStale(this)
         handle(intent)
         setContent { AppTheme { App(tab, sharedTicket) } }
@@ -192,9 +197,20 @@ private fun App(tab: MutableIntState, sharedTicket: MutableState<String?>) {
         return
     }
 
+    var editingPolling by remember { mutableStateOf(false) }
+    if (editingPolling) PollingDialog { editingPolling = false }
     val titles = listOf("Offices", "Alerts", "Walk-in")
     Scaffold(
-        topBar = { TopAppBar(title = { Text(titles[tab.intValue]) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(titles[tab.intValue]) },
+                actions = {
+                    IconButton(onClick = { editingPolling = true }) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Polling settings")
+                    }
+                },
+            )
+        },
         bottomBar = {
             NavigationBar {
                 listOf(Icons.Filled.Place, Icons.Filled.Notifications, Icons.Filled.ConfirmationNumber)
@@ -327,6 +343,60 @@ private fun Section(title: String, subtitle: String, content: @Composable () -> 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PollingDialog(onDone: () -> Unit) {
+    val context = LocalContext.current
+    val settings by Polling.settings(context).collectAsState()
+    val current = settings ?: return
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Polling") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                SettingRow("Background history") {
+                    Switch(current.history, onCheckedChange = { on -> Polling.update(context) { it.copy(history = on) } })
+                }
+                if (current.history) {
+                    Choice(Polling.HISTORY_MINUTES, current.historyMinutes) { minutes ->
+                        Polling.update(context) { it.copy(historyMinutes = minutes) }
+                    }
+                    SettingRow("Wi-Fi only") {
+                        Switch(current.wifiOnly, onCheckedChange = { on -> Polling.update(context) { it.copy(wifiOnly = on) } })
+                    }
+                }
+                Text("Alert checks", fontWeight = FontWeight.Medium)
+                Choice(Polling.ALERT_MINUTES, current.alertMinutes) { minutes ->
+                    Polling.update(context) { it.copy(alertMinutes = minutes) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDone) { Text("Done") } },
+    )
+}
+
+@Composable
+private fun SettingRow(label: String, control: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f), fontWeight = FontWeight.Medium)
+        control()
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Choice(options: List<Int>, selected: Int, onSelect: (Int) -> Unit) {
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        options.forEachIndexed { index, minutes ->
+            SegmentedButton(
+                selected = minutes == selected,
+                onClick = { onSelect(minutes) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+            ) { Text("$minutes min") }
+        }
+    }
+}
+
 private data class AlertView(val alert: LocalAlert, val office: Office?, val freeCount: Int, val firstFree: Instant?)
 
 @Composable
@@ -372,7 +442,12 @@ private fun AlertsScreen(modifier: Modifier) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        IconButton(onClick = { Thread { Store.get(context).deleteAlert(view.alert.id) }.start() }) {
+                        IconButton(onClick = {
+                            Thread {
+                                Store.get(context).deleteAlert(view.alert.id)
+                                Polling.apply(context)
+                            }.start()
+                        }) {
                             Icon(Icons.Filled.Delete, contentDescription = "Delete alert")
                         }
                     }
@@ -384,7 +459,10 @@ private fun AlertsScreen(modifier: Modifier) {
     if (adding) {
         NewAlertDialog(OFFICES, onDismiss = { adding = false }) { office, until ->
             adding = false
-            Thread { Store.get(context).addAlert(office, until) }.start()
+            Thread {
+                Store.get(context).addAlert(office, until)
+                Polling.apply(context)
+            }.start()
         }
     }
 }

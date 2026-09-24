@@ -96,9 +96,10 @@ class Store private constructor(context: Context) :
         return created
     }
 
-    fun lastPoll(): Instant? =
-        readableDatabase.rawQuery("SELECT MAX(at) FROM polls", null).use { c ->
-            if (c.moveToFirst() && !c.isNull(0)) Instant.ofEpochMilli(c.getLong(0)) else null
+    /** The latest poll of each office that was polled at all. */
+    fun latestPolls(): Map<String, Instant> =
+        readableDatabase.rawQuery("SELECT office, MAX(at) FROM polls GROUP BY office", null).use { c ->
+            buildMap { while (c.moveToNext()) put(c.getString(0), Instant.ofEpochMilli(c.getLong(1))) }
         }
 
     fun blockedUntil(system: String): Instant? =

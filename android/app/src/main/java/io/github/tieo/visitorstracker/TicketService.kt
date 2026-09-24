@@ -81,6 +81,18 @@ class TicketService : Service() {
     }
 
     private suspend fun follow(url: String) {
+        // The queue moves while the phone sleeps in a pocket; the ticket is followed only for a visit.
+        val lock = getSystemService(android.os.PowerManager::class.java)
+            .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "visitorstracker:ticket")
+        lock.acquire(6 * 60 * 60 * 1000L)
+        try {
+            followLocked(url)
+        } finally {
+            if (lock.isHeld) lock.release()
+        }
+    }
+
+    private suspend fun followLocked(url: String) {
         var announcedSoon = false
         var announcedCall = false
         while (scope.isActive) {

@@ -7,11 +7,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import io.github.tieo.visitorstracker.source.Flexappoint
@@ -57,18 +55,18 @@ object Collector {
     /** Whether a round is in progress, for the pull-to-refresh indicator. */
     val running: StateFlow<Boolean> = runningFlow.asStateFlow()
 
-    suspend fun run(context: Context) = mutex.withLock {
+    suspend fun run(context: Context, offices: List<Office> = OFFICES) = mutex.withLock {
         runningFlow.value = true
         try {
-            withContext(Dispatchers.IO) { round(context) }
+            withContext(Dispatchers.IO) { round(context, offices) }
         } finally {
             runningFlow.value = false
         }
     }
 
-    private suspend fun round(context: Context) {
+    private suspend fun round(context: Context, offices: List<Office>) {
         val store = Store.get(context)
-        for (office in OFFICES) {
+        for (office in offices) {
             val at = Instant.now()
             val until = store.blockedUntil(office.system)
             if (until != null && until.isAfter(at)) {
@@ -136,19 +134,12 @@ object Collector {
 
     private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
-    /** Keeps the 15 minute polling scheduled; WorkManager's floor for periodic work. */
-    fun schedule(context: Context) {
-        // Opening the app already runs a round when the data is stale, so the first periodic one waits.
-        val request = PeriodicWorkRequestBuilder<CollectWorker>(15, TimeUnit.MINUTES)
-            .setConstraints(online).setInitialDelay(15, TimeUnit.MINUTES).build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork("collect", ExistingPeriodicWorkPolicy.KEEP, request)
-    }
-
     /** A round on opening the app, when the data is older than a regular round would leave it. */
     fun refreshIfStale(context: Context) {
         Thread {
-            val last = Store.get(context).lastPoll()
-            if (last == null || Duration.between(last, Instant.now()) > Duration.ofMinutes(10)) runNow(context)
+            val latest = Store.get(context).latestPolls()
+            val oldest = OFFICES.minOfOrNull { latest[it.id] ?: Instant.EPOCH }
+            if (oldest == null || Duration.between(oldest, Instant.now()) > Duration.ofMinutes(10)) runNow(context)
         }.start()
     }
 
