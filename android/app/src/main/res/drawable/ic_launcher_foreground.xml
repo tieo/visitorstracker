@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Calendar page with a check mark, inside the adaptive icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M36,38h36a4,4 0,0 1,4 4v30a4,4 0,0 1,-4 4h-36a4,4 0,0 1,-4 -4v-30a4,4 0,0 1,4 -4z" />
+    <path android:fillColor="#1C5CAB" android:pathData="M32,42a4,4 0,0 1,4 -4h36a4,4 0,0 1,4 4v6h-44z" />
+    <path android:strokeColor="#2A78D6" android:strokeWidth="4.5" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M44,62l7,7l14,-14" />
+</vector>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light by day and dark by night; the embedded dashboard follows the same switch. -->
+    <style name="Theme.App" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F9F9F7</item>
+    </style>
+</resources>
