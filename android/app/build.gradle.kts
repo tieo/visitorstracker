@@ -41,7 +41,7 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
-    implementation(libs.unifiedpush.connector)
+    implementation(libs.androidx.work.runtime)
 
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.junit.jupiter)

@@ -1,13 +1,10 @@
 package io.github.tieo.visitorstracker
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -20,14 +17,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -43,9 +42,9 @@ import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,25 +63,28 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.launch
-import org.unifiedpush.android.connector.UnifiedPush
+import io.github.tieo.visitorstracker.source.OFFICES
+import io.github.tieo.visitorstracker.source.Office
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -92,24 +94,19 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     private val tab = mutableIntStateOf(0)
     private val sharedTicket = mutableStateOf<String?>(null)
-    private val settingsVersion = mutableIntStateOf(0)
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Earlier versions kept a server address and token here; nothing reads them any more.
+        deleteSharedPreferences("settings")
         Notifications.createChannels(this)
         askForNotifications()
-        registerPush()
+        Collector.schedule(this)
+        if (savedInstanceState == null) Collector.refreshIfStale(this)
         handle(intent)
-        setContent {
-            AppTheme {
-                // A setup link rebuilds the app state with the new settings.
-                androidx.compose.runtime.key(settingsVersion.intValue) {
-                    App(Prefs(this), tab, sharedTicket, ::registerPush)
-                }
-            }
-        }
+        setContent { AppTheme { App(tab, sharedTicket) } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -121,17 +118,6 @@ class MainActivity : ComponentActivity() {
         when (intent.getStringExtra(EXTRA_TAB)) {
             TAB_ALERTS -> tab.intValue = 1
             TAB_TICKET -> tab.intValue = 2
-        }
-        val data = intent.data
-        if (intent.action == Intent.ACTION_VIEW && data?.scheme == "visitorstracker" && data.host == "setup") {
-            val server = data.getQueryParameter("server")
-            val token = data.getQueryParameter("token")
-            if (server != null && server.startsWith("https://") && !token.isNullOrBlank()) {
-                val prefs = Prefs(this)
-                prefs.server = server
-                prefs.token = token
-                settingsVersion.intValue++
-            }
         }
         if (intent.action == Intent.ACTION_SEND) {
             val url = intent.getStringExtra(Intent.EXTRA_TEXT)?.let(Ticket::findUrl) ?: return
@@ -150,12 +136,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun registerPush() {
-        UnifiedPush.tryUseCurrentOrDefaultDistributor(this) { found ->
-            if (found) UnifiedPush.register(this)
-        }
-    }
-
     companion object {
         const val EXTRA_TAB = "tab"
         const val TAB_ALERTS = "alerts"
@@ -165,36 +145,35 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppTheme(content: @Composable () -> Unit) {
-    val blue = Color(0xFF2A78D6)
     val scheme = if (isSystemInDarkTheme()) {
-        darkColorScheme(primary = Color(0xFF6DA7EC), background = Color(0xFF0D0D0D), surface = Color(0xFF1A1A19))
+        darkColorScheme(primary = Color(0xFF6DA7EC), background = Color(0xFF0D0D0D), surface = Color(0xFF0D0D0D),
+            surfaceContainerHighest = Color(0xFF1A1A19))
     } else {
-        lightColorScheme(primary = blue, background = Color(0xFFF9F9F7), surface = Color(0xFFFCFCFB))
+        lightColorScheme(primary = Color(0xFF2A78D6), background = Color(0xFFF9F9F7), surface = Color(0xFFF9F9F7),
+            surfaceContainerHighest = Color(0xFFF0EFEC))
     }
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
 private val dayFormat = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
+/** Everything one office screen shows, recomputed whenever the store changes. */
+@Composable
+private fun officeState(office: Office): OfficeState? {
+    val context = LocalContext.current
+    val version by Store.changes.collectAsState()
+    return produceState<OfficeState?>(null, office.id, version) {
+        value = withContext(Dispatchers.IO) {
+            val store = Store.get(context)
+            Analysis.state(store.polls(office.id), store.slots(office.id), Instant.now())
+        }
+    }.value
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun App(
-    prefs: Prefs,
-    tab: androidx.compose.runtime.MutableIntState,
-    sharedTicket: androidx.compose.runtime.MutableState<String?>,
-    registerPush: () -> Unit,
-) {
-    var configured by remember { mutableStateOf(prefs.configured) }
-    var editingSettings by remember { mutableStateOf(!prefs.configured) }
+private fun App(tab: MutableIntState, sharedTicket: MutableState<String?>) {
     var openOffice by remember { mutableStateOf<Office?>(null) }
-    var offices by remember { mutableStateOf<List<Office>>(emptyList()) }
-
-    if (editingSettings) {
-        SettingsDialog(prefs, canDismiss = configured) {
-            configured = prefs.configured
-            editingSettings = false
-        }
-    }
 
     openOffice?.let { office ->
         BackHandler { openOffice = null }
@@ -209,22 +188,13 @@ private fun App(
                     },
                 )
             },
-        ) { padding -> OfficePage(Api(prefs), office, Modifier.padding(padding)) }
+        ) { padding -> OfficeScreen(office, Modifier.padding(padding)) }
         return
     }
 
     val titles = listOf("Offices", "Alerts", "Walk-in")
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(titles[tab.intValue]) },
-                actions = {
-                    IconButton(onClick = { editingSettings = true }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                    }
-                },
-            )
-        },
+        topBar = { TopAppBar(title = { Text(titles[tab.intValue]) }) },
         bottomBar = {
             NavigationBar {
                 listOf(Icons.Filled.Place, Icons.Filled.Notifications, Icons.Filled.ConfirmationNumber)
@@ -241,100 +211,45 @@ private fun App(
     ) { padding ->
         val modifier = Modifier.padding(padding)
         when (tab.intValue) {
-            0 -> OfficesScreen(prefs, configured, modifier, onLoaded = { offices = it }) { openOffice = it }
-            1 -> AlertsScreen(prefs, configured, offices, registerPush, modifier)
+            0 -> OfficesScreen(modifier) { openOffice = it }
+            1 -> AlertsScreen(modifier)
             else -> TicketScreen(modifier, sharedTicket)
         }
     }
 }
 
-@Composable
-private fun SettingsDialog(prefs: Prefs, canDismiss: Boolean, onDone: () -> Unit) {
-    var server by remember { mutableStateOf(prefs.server.ifEmpty { "https://" }) }
-    var token by remember { mutableStateOf(prefs.token) }
-    val valid = server.startsWith("https://") && server.length > 8 && token.isNotBlank()
-    AlertDialog(
-        onDismissRequest = { if (canDismiss) onDone() },
-        title = { Text("Server") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = server, onValueChange = { server = it }, singleLine = true,
-                    label = { Text("Address") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                )
-                OutlinedTextField(
-                    value = token, onValueChange = { token = it }, singleLine = true,
-                    label = { Text("Token") },
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = valid, onClick = {
-                prefs.server = server
-                prefs.token = token
-                onDone()
-            }) { Text("Save") }
-        },
-        dismissButton = if (canDismiss) {
-            { TextButton(onClick = onDone) { Text("Cancel") } }
-        } else {
-            null
-        },
-    )
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun OfficesScreen(
-    prefs: Prefs,
-    configured: Boolean,
-    modifier: Modifier,
-    onLoaded: (List<Office>) -> Unit,
-    onOpen: (Office) -> Unit,
-) {
-    var offices by remember { mutableStateOf<List<Office>>(emptyList()) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val load: () -> Unit = {
-        scope.launch {
-            loading = true
-            runCatching { Api(prefs).offices() }
-                .onSuccess { offices = it; error = null; onLoaded(it) }
-                .onFailure { error = it.message ?: "Could not load" }
-            loading = false
-        }
-    }
-    LaunchedEffect(configured, prefs.server, prefs.token) { if (configured) load() }
-
-    PullToRefreshBox(isRefreshing = loading, onRefresh = load, modifier = modifier.fillMaxSize()) {
+private fun OfficesScreen(modifier: Modifier, onOpen: (Office) -> Unit) {
+    val context = LocalContext.current
+    val running by Collector.running.collectAsState()
+    PullToRefreshBox(isRefreshing = running, onRefresh = { Collector.runNow(context) }, modifier = modifier.fillMaxSize()) {
         LazyColumn(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
-            items(offices, key = { it.id }) { office ->
+            items(OFFICES, key = { it.id }) { office ->
+                val state = officeState(office)
                 Card(Modifier.fillMaxWidth().clickable { onOpen(office) }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(office.name, fontWeight = FontWeight.SemiBold)
                             Text(
-                                office.nextFree?.let { "next " + PushReceiver.formatTime(it) } ?: "nothing free",
+                                when {
+                                    state?.lastOk == null -> "not read yet"
+                                    state.nextFree != null -> "next " + Collector.format(state.nextFree)
+                                    else -> "nothing free"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (office.lastPollOk == false) {
-                                Text(
-                                    "⚠ last poll failed",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
+                            if (state?.lastPoll?.ok == false) {
+                                Text("⚠ last poll failed", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error)
                             }
                         }
-                        Text("${office.freeNow}", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                        Text(state?.lastOk?.let { "${state.freeNow}" } ?: "–", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -342,59 +257,100 @@ private fun OfficesScreen(
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun OfficePage(api: Api, office: Office, modifier: Modifier) {
-    AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = { context ->
-            WebView(context).apply {
-                settings.javaScriptEnabled = true
-                // The page is self-contained, so only this first request needs the token.
-                webViewClient = WebViewClient()
-                loadUrl(api.pageUrl(office.id), api.authHeaders())
-            }
-        },
-    )
+private fun ago(moment: Instant?, now: Instant): String {
+    if (moment == null) return "never"
+    val minutes = Duration.between(moment, now).toMinutes()
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 48 * 60 -> "${minutes / 60} h ago"
+        else -> "${minutes / 1440} days ago"
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AlertsScreen(
-    prefs: Prefs,
-    configured: Boolean,
-    offices: List<Office>,
-    registerPush: () -> Unit,
-    modifier: Modifier,
-) {
-    var alerts by remember { mutableStateOf<List<Alert>>(emptyList()) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var adding by remember { mutableStateOf(false) }
-    var knownOffices by remember { mutableStateOf(offices) }
-    val scope = rememberCoroutineScope()
-    val endpoint by prefs.endpointChanges.collectAsState()
-    val reload: () -> Unit = {
-        scope.launch {
-            runCatching {
-                val api = Api(prefs)
-                if (knownOffices.isEmpty()) knownOffices = api.offices()
-                api.alerts(endpoint)
-            }.onSuccess { alerts = it; error = null }.onFailure { error = it.message }
+private fun OfficeScreen(office: Office, modifier: Modifier) {
+    val state = officeState(office) ?: return
+    val now = Instant.now()
+    Column(
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            office.authority + (state.trackingSince?.let { " · watched since " + Collector.format(it) } ?: ""),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
+            Tile("Free now", "${state.freeNow}", "appointments", Modifier.weight(1f).fillMaxHeight())
+            Tile("Next free", state.nextFree?.let(Collector::format) ?: "–", null, Modifier.weight(1f).fillMaxHeight())
+        }
+        val last = state.lastPoll
+        Tile(
+            "Last poll",
+            when {
+                last == null -> "–"
+                last.ok -> ago(last.at, now)
+                else -> "⚠ failed"
+            },
+            if (last != null && !last.ok) "${last.error.orEmpty()} · last success ${ago(state.lastOk?.at, now)}" else last?.at?.let(Collector::format),
+            Modifier.fillMaxWidth(),
+        )
+        Section("How fast slots go", "Time from release until half of the start times are booked, by weekday and time of the appointment") {
+            Heatmap(state.cells)
+        }
+        Section("What is left", "Free appointments per day") { DayBars(state.freeByDay) }
+        Section("Free appointments over time", "Number of free appointments at each poll") { Timeline(state.timeline) }
+    }
+}
+
+@Composable
+private fun Tile(label: String, value: String, note: String?, modifier: Modifier) {
+    Card(modifier) {
+        Column(Modifier.padding(14.dp)) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
-    LaunchedEffect(configured, endpoint) { if (configured && endpoint != null) reload() }
-    val names = knownOffices.associate { it.id to it.name }
+}
+
+@Composable
+private fun Section(title: String, subtitle: String, content: @Composable () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(10.dp))
+            content()
+        }
+    }
+}
+
+private data class AlertView(val alert: LocalAlert, val office: Office?, val freeCount: Int, val firstFree: Instant?)
+
+@Composable
+private fun AlertsScreen(modifier: Modifier) {
+    val context = LocalContext.current
+    val version by Store.changes.collectAsState()
+    var adding by remember { mutableStateOf(false) }
+    val alerts = produceState(emptyList<AlertView>(), version) {
+        value = withContext(Dispatchers.IO) {
+            val store = Store.get(context)
+            store.alerts().map { alert ->
+                val (count, first) = Analysis.freeUntil(store.slots(alert.office, openOnly = true),
+                    LocalDate.parse(alert.until), Instant.now())
+                AlertView(alert, OFFICES.firstOrNull { it.id == alert.office }, count, first)
+            }
+        }
+    }.value
 
     Scaffold(
         modifier = modifier,
         // The outer scaffold already keeps clear of the system bars.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
-            if (endpoint != null && configured) {
-                FloatingActionButton(onClick = { adding = true }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New alert")
-                }
-            }
+            FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, contentDescription = "New alert") }
         },
     ) { inner ->
         LazyColumn(
@@ -402,56 +358,33 @@ private fun AlertsScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.padding(inner).fillMaxSize(),
         ) {
-            if (endpoint == null) {
-                item {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("No push service", fontWeight = FontWeight.SemiBold)
-                            OutlinedButton(onClick = registerPush) { Text("Connect") }
-                        }
-                    }
-                }
-            }
-            error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
-            items(alerts, key = { it.id }) { alert ->
+            items(alerts, key = { it.alert.id }) { view ->
                 Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(names[alert.office] ?: alert.office, fontWeight = FontWeight.SemiBold)
+                            Text(view.office?.name ?: view.alert.office, fontWeight = FontWeight.SemiBold)
+                            Text("until " + LocalDate.parse(view.alert.until).format(dayFormat),
+                                style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                "until " + LocalDate.parse(alert.until).format(dayFormat),
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            Text(
-                                alert.firstFree?.let {
-                                    "${alert.freeCount} free now, first " + PushReceiver.formatTime(it)
-                                } ?: "nothing free yet",
+                                view.firstFree?.let { "${view.freeCount} free now, first " + Collector.format(it) }
+                                    ?: "nothing free yet",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        IconButton(onClick = {
-                            scope.launch {
-                                runCatching { Api(prefs).deleteAlert(alert.id) }
-                                    .onFailure { error = it.message }
-                                reload()
-                            }
-                        }) { Icon(Icons.Filled.Delete, contentDescription = "Delete alert") }
+                        IconButton(onClick = { Thread { Store.get(context).deleteAlert(view.alert.id) }.start() }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Delete alert")
+                        }
                     }
                 }
             }
         }
     }
 
-    val target = endpoint
-    if (adding && target != null) {
-        NewAlertDialog(knownOffices, onDismiss = { adding = false }) { office, until ->
+    if (adding) {
+        NewAlertDialog(OFFICES, onDismiss = { adding = false }) { office, until ->
             adding = false
-            scope.launch {
-                runCatching { Api(prefs).addAlert(office, until, target) }
-                    .onFailure { error = it.message }
-                reload()
-            }
+            Thread { Store.get(context).addAlert(office, until) }.start()
         }
     }
 }
@@ -521,7 +454,7 @@ private fun NewAlertDialog(offices: List<Office>, onDismiss: () -> Unit, onCreat
 @Composable
 private fun TicketScreen(modifier: Modifier, sharedTicket: androidx.compose.runtime.MutableState<String?>) {
     val state by TicketService.current.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var link by remember { mutableStateOf(sharedTicket.value.orEmpty()) }
 
     Column(

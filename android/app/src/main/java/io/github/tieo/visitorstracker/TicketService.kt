@@ -50,6 +50,11 @@ class TicketService : Service() {
             tracked.value = value
         }
 
+    /** The followed link, kept so a restarted service picks the ticket up again. */
+    private var savedTicket: String?
+        get() = getSharedPreferences("ticket", MODE_PRIVATE).getString("url", null)
+        set(value) = getSharedPreferences("ticket", MODE_PRIVATE).edit().putString("url", value).apply()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,12 +62,12 @@ class TicketService : Service() {
             stop(clear = true)
             return START_NOT_STICKY
         }
-        val url = intent?.getStringExtra(EXTRA_URL) ?: Prefs(this).ticketUrl
+        val url = intent?.getStringExtra(EXTRA_URL) ?: savedTicket
         if (url == null) {
             stopSelf()
             return START_NOT_STICKY
         }
-        Prefs(this).ticketUrl = url
+        savedTicket = url
         ticket = TicketState(url)
         ServiceCompat.startForeground(
             this,
@@ -169,7 +174,7 @@ class TicketService : Service() {
     }
 
     private fun stop(clear: Boolean) {
-        if (clear) Prefs(this).ticketUrl = null
+        if (clear) savedTicket = null
         job?.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
