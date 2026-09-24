@@ -48,6 +48,8 @@ import java.util.concurrent.TimeUnit
 object Collector {
     private const val TAG = "Collector"
     private const val PAUSE_MILLIS = 5_000L
+    /** Between offices in a dense round, which has to fit its two minutes. */
+    private const val DENSE_PAUSE_MILLIS = 2_000L
     private val DEFAULT_BLOCK = Duration.ofMinutes(15)
     private val mutex = Mutex()
     private val runningFlow = MutableStateFlow(false)
@@ -98,7 +100,7 @@ object Collector {
                 Log.w(TAG, "${office.id} failed", error)
                 store.recordFailure(office.id, at, "${error.javaClass.simpleName}: ${error.message}")
             }
-            delay(PAUSE_MILLIS)
+            delay(if (dense) DENSE_PAUSE_MILLIS else PAUSE_MILLIS)
         }
     }
 

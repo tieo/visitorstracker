@@ -4,3 +4,4 @@ local.properties
 .kotlin/
 *.apk
 gradle/wrapper/gradle-wrapper.jar
+keystore.properties

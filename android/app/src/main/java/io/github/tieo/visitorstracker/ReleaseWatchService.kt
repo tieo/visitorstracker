@@ -37,7 +37,8 @@ object ReleasePlanner {
 
     /**
      * The span watched until an office has shown releases of its own; those
-     * then replace it.
+     * then replace it. The Landratsamt calendars add the day two weeks ahead
+     * at midnight.
      */
     val DEFAULT_SPAN = 23 * 60 + 55 to 5
 
@@ -119,10 +120,13 @@ class ReleaseWatchService : Service() {
         lock.acquire(90 * 60 * 1000L)
         try {
             while (true) {
-                val offices = ReleasePlanner.due(this, Instant.now())
+                val started = Instant.now()
+                val offices = ReleasePlanner.due(this, started)
                 if (offices.isEmpty()) break
                 Collector.run(this, offices, dense = true)
-                delay(ReleasePlanner.INTERVAL.toMillis())
+                // Rounds start every interval, however long the reading took.
+                val next = started.plus(ReleasePlanner.INTERVAL)
+                delay(maxOf(0L, Duration.between(Instant.now(), next).toMillis()))
             }
         } finally {
             if (lock.isHeld) lock.release()

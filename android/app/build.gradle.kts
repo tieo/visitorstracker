@@ -1,7 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.compose.compiler)
+}
+
+// Release signing reads a gitignored keystore.properties that points at a key kept outside the
+// repository; without it only debug builds are signed.
+val signing = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
+    Properties().apply { file.inputStream().use(::load) }
 }
 
 android {
@@ -12,8 +20,26 @@ android {
         applicationId = "io.github.tieo.visitorstracker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    signingConfigs {
+        if (signing != null) {
+            create("release") {
+                storeFile = file(signing.getProperty("storeFile"))
+                val password = file(signing.getProperty("passwordFile")).readText().trim()
+                storePassword = password
+                keyAlias = signing.getProperty("alias")
+                keyPassword = password
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 
     buildFeatures {
