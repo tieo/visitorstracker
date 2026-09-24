@@ -11,6 +11,7 @@ from datetime import date, datetime
 
 from . import analysis, store
 from .analysis import local
+from .sources import Slot, appointments
 
 UNTIL = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -34,23 +35,28 @@ def office_summary(db, office, now) -> dict:
     }
 
 
-def free_until(db, office_id: str, until: str, now: datetime, limit: int = 20) -> list[str]:
-    """Start times of free slots on or before ``until``, earliest first."""
+def free_until(db, office_id: str, until: str, now: datetime) -> tuple[int, str | None]:
+    """Free appointments starting on or before ``until``, and the earliest start."""
     rows = db.execute(
-        "SELECT DISTINCT start FROM slots WHERE office = ? AND gone_seen IS NULL AND start > ? "
+        "SELECT start, end, resource FROM slots WHERE office = ? AND gone_seen IS NULL AND start > ? "
         "ORDER BY start",
         (office_id, store.utc(now)),
     ).fetchall()
-    starts = [analysis.parse(r["start"]) for r in rows]
-    return [stamp(s) for s in starts if local(s).date().isoformat() <= until][:limit]
+    slots = [Slot(analysis.parse(r["start"]), analysis.parse(r["end"]), r["resource"]) for r in rows]
+    slots = [s for s in slots if local(s.start).date().isoformat() <= until]
+    if not slots:
+        return 0, None
+    return appointments(slots), stamp(slots[0].start)
 
 
 def alert_json(db, row, now) -> dict:
+    count, first = free_until(db, row["office"], row["until_date"], now)
     return {
         "id": row["id"],
         "office": row["office"],
         "until": row["until_date"],
-        "free": free_until(db, row["office"], row["until_date"], now),
+        "free_count": count,
+        "first_free": first,
     }
 
 

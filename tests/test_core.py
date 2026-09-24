@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from visitorstracker import alerts, analysis, store, web
+from visitorstracker import alerts, analysis, api, store, web
 from visitorstracker.sources import Slot, appointments
 
 T0 = datetime(2026, 10, 5, 7, 0, tzinfo=timezone.utc)  # Mon 09:00 in Berlin
@@ -126,3 +126,11 @@ def test_alert_lifecycle(server):
     assert [a["id"] for a in call(server + "/api/alerts")[1]] == [created["id"]]
     assert call(server + f"/api/alerts/{created['id']}", "DELETE")[0] == 204
     assert call(server + "/api/alerts")[1] == []
+
+
+def test_alert_reports_free_appointments_up_to_its_date(db):
+    now = T0 - timedelta(days=2)
+    # Thirty 10 minute starts every 5 minutes on one counter hold 15 appointments.
+    store.record_snapshot(db, "kfz", now, [slot(5 * n) for n in range(30)] + [slot(60 * 24 * 5)])
+    count, first = api.free_until(db, "kfz", "2026-10-05", now)
+    assert count == 15 and first.startswith("2026-10-05T09:00")
