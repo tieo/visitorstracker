@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from . import sources, store
+from . import alerts, sources, store
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ DEFAULT_BLOCK = timedelta(minutes=15)
 def run(db, offices, pause_seconds: float = 5.0):
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
+    pushes = requests.Session()
     for office in offices:
         system = office["system"]
         at = datetime.now(timezone.utc)
@@ -42,6 +43,7 @@ def run(db, offices, pause_seconds: float = 5.0):
             log.exception("%s: failed", office["id"])
             store.record_failure(db, office["id"], at, f"{type(error).__name__}: {error}")
         else:
-            store.record_snapshot(db, office["id"], at, slots)
+            new_ids = store.record_snapshot(db, office["id"], at, slots)
             log.info("%s: %d free", office["id"], len(slots))
+            alerts.notify(db, office, new_ids, at, pushes)
         time.sleep(pause_seconds)

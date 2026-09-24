@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS blocks (
     system TEXT PRIMARY KEY,
     until TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY,
+    office TEXT NOT NULL,
+    until_date TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS alert_hits (
+    alert INTEGER NOT NULL REFERENCES alerts (id) ON DELETE CASCADE,
+    slot INTEGER NOT NULL,
+    PRIMARY KEY (alert, slot)
+);
 """
 
 
@@ -51,6 +63,7 @@ def connect(path) -> sqlite3.Connection:
     db = sqlite3.connect(path, timeout=30)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
     db.executescript(SCHEMA)
     return db
 
@@ -77,7 +90,8 @@ def record_failure(db, office: str, at: datetime, error: str):
         )
 
 
-def record_snapshot(db, office: str, at: datetime, slots):
+def record_snapshot(db, office: str, at: datetime, slots) -> list[int]:
+    """Stores one successful poll and returns the ids of newly free slots."""
     now = utc(at)
     seen = {(utc(s.start), s.resource): s for s in slots}
     with db:
@@ -97,12 +111,47 @@ def record_snapshot(db, office: str, at: datetime, slots):
                 db.execute("UPDATE slots SET last_seen = ? WHERE id = ?", (now, row["id"]))
             else:
                 db.execute("UPDATE slots SET gone_seen = ? WHERE id = ?", (now, row["id"]))
-        db.executemany(
-            "INSERT INTO slots (office, start, end, resource, first_seen, last_seen) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (office, key[0], utc(slot.end), key[1], now, now)
-                for key, slot in seen.items()
-                if key not in still_open
-            ],
+        new_ids = []
+        for key, slot in seen.items():
+            if key in still_open:
+                continue
+            cursor = db.execute(
+                "INSERT INTO slots (office, start, end, resource, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (office, key[0], utc(slot.end), key[1], now, now),
+            )
+            new_ids.append(cursor.lastrowid)
+    return new_ids
+
+
+def add_alert(db, office: str, until_date: str, endpoint: str, at: datetime) -> int:
+    with db:
+        cursor = db.execute(
+            "INSERT INTO alerts (office, until_date, endpoint, created) VALUES (?, ?, ?, ?)",
+            (office, until_date, endpoint, utc(at)),
         )
+    return cursor.lastrowid
+
+
+def list_alerts(db, endpoint: str | None = None) -> list[sqlite3.Row]:
+    if endpoint is None:
+        return db.execute("SELECT * FROM alerts ORDER BY id").fetchall()
+    return db.execute("SELECT * FROM alerts WHERE endpoint = ? ORDER BY id", (endpoint,)).fetchall()
+
+
+def delete_alert(db, alert_id: int) -> bool:
+    with db:
+        return db.execute("DELETE FROM alerts WHERE id = ?", (alert_id,)).rowcount > 0
+
+
+def claim_hits(db, alert_id: int, slot_ids) -> list[int]:
+    """Marks slots as announced for an alert; returns those not announced before."""
+    fresh = []
+    with db:
+        for slot in slot_ids:
+            cursor = db.execute(
+                "INSERT OR IGNORE INTO alert_hits (alert, slot) VALUES (?, ?)", (alert_id, slot)
+            )
+            if cursor.rowcount:
+                fresh.append(slot)
+    return fresh

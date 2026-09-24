@@ -24,6 +24,8 @@ def main():
     serve = commands.add_parser("serve", help="run the dashboard")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8093)
+    serve.add_argument("--token-file", type=Path,
+                       help="file holding the bearer token for /api and /app; without it both refuse")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -34,7 +36,8 @@ def main():
     else:
         from . import web
 
-        web.serve(args.db, offices, args.host, args.port)
+        token = args.token_file.read_text().strip() if args.token_file else None
+        web.serve(args.db, offices, args.host, args.port, token)
 
 
 if __name__ == "__main__":

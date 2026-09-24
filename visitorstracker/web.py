@@ -5,14 +5,14 @@ last poll. The charts carry their values in ``data-tip`` attributes for the
 hover layer, and every chart has a table twin with the same numbers.
 """
 
+import hmac
 import html
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from . import analysis
+from . import analysis, api, store
 from .analysis import BUCKET_MINUTES, WEEKDAYS, local
 
 # Heatmap classes, fastest first. The ramp steps are validated as an ordinal
@@ -373,15 +373,18 @@ def poll_status(state, now) -> str:
             f'<div class="note">{e(last.error or "")}<br>last success {ago(good and good.at, now)}</div>')
 
 
-def page(title: str, body: str, offices, current: str | None) -> str:
+def page(title: str, body: str, offices, current: str | None, embed: bool = False) -> str:
+    """A full page; ``embed`` drops the heading and office links for the app,
+    which shows its own title bar and navigation around the page."""
     links = ['<a href="/"' + (' aria-current="page"' if current is None else "") + ">Overview</a>"]
     links += [f'<a href="/o/{e(o["id"])}"' + (' aria-current="page"' if o["id"] == current else "")
               + f">{e(o['name'])}</a>" for o in offices]
+    head = "" if embed else f'<h1>{e(title)}</h1><nav class="offices">{"".join(links)}</nav>'
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{e(title)}</title><style>{STYLE}</style></head>"
-            f'<body><div class="viz-root"><div class="frame"><h1>{e(title)}</h1>'
-            f'<nav class="offices">{"".join(links)}</nav>{body}<div id="tip" role="tooltip"></div>'
+            f'<body><div class="viz-root"><div class="frame">{head}{body}'
+            f'<div id="tip" role="tooltip"></div>'
             f"</div></div><script>{SCRIPT}</script></body></html>")
 
 
@@ -402,7 +405,7 @@ def overview(db, offices, now) -> str:
     return page("Appointment watch", body, offices, None)
 
 
-def office_page(db, office, offices, now) -> str:
+def office_page(db, office, offices, now, embed: bool = False) -> str:
     state = analysis.snapshot(db, office["id"], now)
     since = state["tracking_since"]
     body = f"""
@@ -422,29 +425,84 @@ def office_page(db, office, offices, now) -> str:
 <div class="card"><h2>Free appointments over time</h2>
   <p class="sub">Number of free appointments at each poll</p>{timeline_chart(state["timeline"], now)}</div>
 """
-    return page(office["name"], body, offices, office["id"])
+    return page(office["name"], body, offices, office["id"], embed)
 
 
-def serve(db_path, offices, host: str, port: int):
+def serve(db_path, offices, host: str, port: int, token: str | None):
+    make_server(db_path, offices, host, port, token).serve_forever()
+
+
+def make_server(db_path, offices, host: str, port: int, token: str | None) -> ThreadingHTTPServer:
     by_id = {o["id"]: o for o in offices}
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            path = urlparse(self.path).path
+        def handle_request(self, method):
+            url = urlparse(self.path)
+            path = url.path
             now = datetime.now(timezone.utc)
-            db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            db.row_factory = sqlite3.Row
+            guarded = path.startswith("/api/") or path.startswith("/app/")
+            if guarded and not self.authorized():
+                return self.reply_json(401, {"error": "missing or wrong token"})
+            db = store.connect(db_path)
             try:
-                if path == "/":
+                if method == "GET" and path == "/":
                     self.reply(200, overview(db, offices, now))
-                elif path.startswith("/o/") and path[3:] in by_id:
+                elif method == "GET" and path.startswith("/o/") and path[3:] in by_id:
                     self.reply(200, office_page(db, by_id[path[3:]], offices, now))
-                elif path == "/healthz":
+                elif method == "GET" and path.startswith("/app/o/") and path[7:] in by_id:
+                    self.reply(200, office_page(db, by_id[path[7:]], offices, now, embed=True))
+                elif method == "GET" and path == "/api/offices":
+                    self.reply_json(*api.offices(db, offices, now))
+                elif method == "GET" and path == "/api/alerts":
+                    endpoint = parse_qs(url.query).get("endpoint", [None])[0]
+                    self.reply_json(*api.list_alerts(db, endpoint, now))
+                elif method == "POST" and path == "/api/alerts":
+                    body = self.read_json()
+                    if body is None:
+                        self.reply_json(400, {"error": "body must be a JSON object"})
+                    else:
+                        self.reply_json(*api.create_alert(db, by_id, body, now))
+                elif method == "DELETE" and path.startswith("/api/alerts/"):
+                    self.reply_json(*api.delete_alert(db, path[len("/api/alerts/"):]))
+                elif method == "GET" and path == "/healthz":
                     self.reply(200, "ok", "text/plain")
                 else:
                     self.reply(404, "not found", "text/plain")
             finally:
                 db.close()
+
+        def do_GET(self):
+            self.handle_request("GET")
+
+        def do_POST(self):
+            self.handle_request("POST")
+
+        def do_DELETE(self):
+            self.handle_request("DELETE")
+
+        def authorized(self) -> bool:
+            if not token:
+                return False
+            given = self.headers.get("Authorization", "")
+            return hmac.compare_digest(given.encode(), f"Bearer {token}".encode())
+
+        def read_json(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if not 0 < length <= 10_000:
+                return None
+            try:
+                body = json.loads(self.rfile.read(length))
+            except ValueError:
+                return None
+            return body if isinstance(body, dict) else None
+
+        def reply_json(self, status, body):
+            if body is None:
+                self.send_response(status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.reply(status, json.dumps(body, ensure_ascii=False), "application/json")
 
         def reply(self, status, text, kind="text/html"):
             data = text.encode("utf-8")
@@ -458,4 +516,4 @@ def serve(db_path, offices, host: str, port: int):
         def log_message(self, *args):
             pass
 
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    return ThreadingHTTPServer((host, port), Handler)

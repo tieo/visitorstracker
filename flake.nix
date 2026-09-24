@@ -16,6 +16,7 @@
           src = ./.;
           build-system = [ pkgs.python3Packages.hatchling ];
           dependencies = [ pkgs.python3Packages.requests ];
+          nativeCheckInputs = [ pkgs.python3Packages.pytestCheckHook ];
           pythonImportsCheck = [ "visitorstracker" ];
         };
       });
@@ -62,6 +63,11 @@
               default = 8093;
               description = "Port the dashboard listens on.";
             };
+            tokenFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "File holding the bearer token for /api and /app (e.g. a sops secret); read through systemd LoadCredential, so it may stay root-owned.";
+            };
             offices = lib.mkOption {
               type = lib.types.nullOr lib.types.path;
               default = null;
@@ -95,7 +101,9 @@
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
               serviceConfig = hardening // {
-                ExecStart = "${package}/bin/visitorstracker ${args} serve --host ${cfg.host} --port ${toString cfg.port}";
+                ExecStart = "${package}/bin/visitorstracker ${args} serve --host ${cfg.host} --port ${toString cfg.port}"
+                  + lib.optionalString (cfg.tokenFile != null) " --token-file \${CREDENTIALS_DIRECTORY}/token";
+                LoadCredential = lib.optional (cfg.tokenFile != null) "token:${cfg.tokenFile}";
                 Restart = "on-failure";
               };
             };
