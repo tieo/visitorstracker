@@ -72,6 +72,7 @@ nav.offices a[aria-current] { color: var(--text-primary); border-color: var(--se
   padding: 16px 18px; margin-bottom: 16px;
 }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.tiles .card { margin-bottom: 0; }
 .tile .label { color: var(--text-secondary); font-size: 13px; }
 .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
 .tile .note { color: var(--text-muted); font-size: 13px; }
@@ -95,6 +96,13 @@ th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var
 th { color: var(--text-secondary); font-weight: 600; }
 td.num, th.num { text-align: right; }
 table.overview td, table.overview th { font-size: 15px; padding: 9px 12px 9px 0; }
+@media (max-width: 520px) {
+  .frame { padding: 14px; }
+  .tiles { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tiles .tile:last-child { grid-column: span 2; }
+  .tile .value { font-size: 20px; }
+  .card { padding: 14px; }
+}
 #tip {
   position: fixed; pointer-events: none; display: none; z-index: 10;
   background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
