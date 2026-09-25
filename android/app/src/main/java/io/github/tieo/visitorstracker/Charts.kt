@@ -117,7 +117,7 @@ fun SurvivalBars(rows: List<SurvivalRow>, highlight: Int?, detail: (SurvivalRow)
                     gridLines(colors.grid)
                     if (survival == null || !survival.known) {
                         val released = survival?.released ?: 0
-                        val text = measurer.measure("$released of ${Survival.MIN_RELEASED} seen", learningStyle)
+                        val text = measurer.measure("$released of ${survival?.minimum ?: Survival.MIN_RELEASED} seen", learningStyle)
                         drawText(text, topLeft = Offset(6.dp.toPx(), (size.height - text.size.height) / 2))
                         return@Canvas
                     }

@@ -133,10 +133,10 @@ object Analysis {
     private fun hours(from: Instant, to: Instant) = Duration.between(from, to).toMillis() / 3_600_000.0
 
     /** How long slots of a group stay free after release. */
-    fun survival(slots: List<Tracked>, now: Instant): Survival {
+    fun survival(slots: List<Tracked>, now: Instant, minimum: Int = Survival.MIN_RELEASED): Survival {
         val (median, observed) = medianHoursToBooking(slots, now)
         val watched = slots.filter { it.releasedInView }
-        return Survival(median, observed, watched.size, watched.count { it.outcome == Outcome.BOOKED })
+        return Survival(median, observed, watched.size, watched.count { it.outcome == Outcome.BOOKED }, minimum)
     }
 
     /**
@@ -150,9 +150,10 @@ object Analysis {
         val local = { slot: Tracked -> slot.start.atZone(BERLIN) }
         val byWeekday = slots.groupBy { local(it).dayOfWeek.value }.mapValues { survival(it.value, now) }
         val byHour = slots.groupBy { local(it).dayOfWeek.value }.mapValues { (_, day) ->
-            day.groupBy { local(it).hour }.mapValues { survival(it.value, now) }
+            day.groupBy { local(it).hour }.mapValues { survival(it.value, now, Survival.MIN_RELEASED_HOUR) }
         }
-        return Insight(byWeekday, byHour, releases(ok, rows), survival(slots, now),
+        val anyDay = slots.groupBy { local(it).hour }.mapValues { survival(it.value, now, Survival.MIN_RELEASED_HOUR) }
+        return Insight(byWeekday, byHour + (ANY_DAY to anyDay), releases(ok, rows), survival(slots, now),
             slots.count { it.releasedInView }, ok.firstOrNull()?.at)
     }
 
@@ -191,16 +192,29 @@ object Analysis {
     }
 }
 
+/** Key of [Insight.byHour] for the hours pooled over every weekday. */
+const val ANY_DAY = 0
+
 /** Half of the slots were booked after [medianHours]; null while more than half are still free after [observedHours]. */
-data class Survival(val medianHours: Double?, val observedHours: Double, val released: Int, val booked: Int) {
+data class Survival(
+    val medianHours: Double?,
+    val observedHours: Double,
+    val released: Int,
+    val booked: Int,
+    /** Released slots a group needs before its median means anything. */
+    val minimum: Int = MIN_RELEASED,
+) {
     /** Enough released slots to say anything. */
-    val known: Boolean get() = released >= MIN_RELEASED
+    val known: Boolean get() = released >= minimum
 
     /** Hours the slots last, as far as measured; a lower bound while [medianHours] is null. */
     val hours: Double get() = medianHours ?: observedHours
 
     companion object {
         const val MIN_RELEASED = 20
+
+        /** An hour gets far fewer slots than a whole weekday. */
+        const val MIN_RELEASED_HOUR = 10
     }
 }
 
@@ -211,6 +225,7 @@ data class FreeDay(val day: LocalDate, val appointments: Int, val first: Instant
 
 data class Insight(
     val byWeekday: Map<Int, Survival>,
+    /** Hour of day by weekday, and under [ANY_DAY] pooled over all weekdays. */
     val byHour: Map<Int, Map<Int, Survival>>,
     val releases: List<Release>,
     val overall: Survival,

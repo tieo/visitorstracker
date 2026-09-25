@@ -219,14 +219,17 @@ private fun BestChance(insight: Insight, watch: Pair<Instant, Instant>?) {
 
 @Composable
 private fun BestTime(insight: Insight) {
-    val days = insight.byHour.keys.sorted()
+    val days = insight.byHour.keys.filter { it != ANY_DAY }.sorted()
     if (days.isEmpty()) return
-    var day by remember(days) { mutableStateOf(insight.easiestDay() ?: days.first()) }
+    // The easiest weekday once its hours can be ranked, otherwise all weekdays pooled.
+    val start = insight.easiestDay()?.takeIf { insight.easiestHour(it) != null } ?: ANY_DAY
+    var day by remember(days) { mutableStateOf(start) }
     val hours = insight.byHour[day].orEmpty()
     val easiest = insight.easiestHour(day)
     val hardest = insight.hardestHour(day)
+    val dayName = if (day == ANY_DAY) "any day" else WEEKDAYS[day - 1]
     val summary = when {
-        easiest == null -> "Not enough released slots on ${WEEKDAYS[day - 1]} yet."
+        easiest == null -> "Not enough released slots on $dayName yet."
         hardest != null && hardest != easiest ->
             "${minuteClock(easiest * 60)} lasts longest (${survivalText(hours.getValue(easiest))}); " +
                 "${minuteClock(hardest * 60)} goes first (${durationText(hours.getValue(hardest).hours)})."
@@ -234,14 +237,14 @@ private fun BestTime(insight: Insight) {
     }
     Panel("Best time", summary) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            days.forEach { weekday ->
+            (listOf(ANY_DAY) + days).forEach { weekday ->
                 FilterChip(selected = weekday == day, onClick = { day = weekday },
-                    label = { Text(WEEKDAYS_SHORT[weekday - 1]) })
+                    label = { Text(if (weekday == ANY_DAY) "All days" else WEEKDAYS_SHORT[weekday - 1]) })
             }
         }
         Spacer(Modifier.height(8.dp))
         val rows = hours.keys.sorted().map { SurvivalRow(it, minuteClock(it * 60), hours[it]) }
-        SurvivalBars(rows, easiest) { row -> detail("${WEEKDAYS[day - 1]} ${row.label}", row.survival) }
+        SurvivalBars(rows, easiest) { row -> detail(if (day == ANY_DAY) row.label else "${WEEKDAYS[day - 1]} ${row.label}", row.survival) }
     }
 }
 
@@ -252,12 +255,12 @@ private fun Releases(insight: Insight, state: OfficeState) {
     val body = when {
         last == null -> "No new appointment day appeared since watching began."
         else -> {
-            val span = if (Duration.between(last.before, last.seen) < Duration.ofMinutes(30)) {
-                "between ${clock(last.before)} and ${clock(last.seen)}"
+            val before = if (Duration.between(last.before, last.seen) < Duration.ofMinutes(30)) {
+                " (check before: ${clock(last.before)})"
             } else {
-                "by ${clock(last.seen)}"
+                ""
             }
-            "Newest: ${last.day.format(dayMonth)}, appeared ${last.seen.atZone(BERLIN).format(dayMonth)} $span."
+            "Newest: ${last.day.format(dayMonth)}, appeared ${last.seen.atZone(BERLIN).format(dayMonth)}, ${clock(last.seen)}$before."
         }
     }
     Panel("New days", window?.let { "Usually released around ${minuteClock(it.second)}" } ?: "Release time not known yet") {
