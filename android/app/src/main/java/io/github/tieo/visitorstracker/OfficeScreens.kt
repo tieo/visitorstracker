@@ -85,12 +85,14 @@ private fun verdict(data: OfficeData): String {
     val insight = data.insight
     val easiest = insight.easiestDay()
     val hardest = insight.hardestDay()
+    val next = data.state.nextFree
     return when {
         data.state.lastOk == null -> "Not read yet"
         easiest != null && hardest != null && hardest != easiest ->
             "Easiest ${WEEKDAYS_SHORT[easiest - 1]} · hardest ${WEEKDAYS_SHORT[hardest - 1]}"
         easiest != null -> "Easiest ${WEEKDAYS_SHORT[easiest - 1]}"
-        else -> "Learning · ${insight.released} released slots seen"
+        next != null -> "Next free ${next.atZone(BERLIN).format(dayMonth)}, ${clock(next)}"
+        else -> "Nothing free"
     }
 }
 
@@ -99,7 +101,21 @@ private fun verdict(data: OfficeData): String {
 fun OfficesScreen(modifier: Modifier, onOpen: (Office) -> Unit) {
     val context = LocalContext.current
     val running by Collector.running.collectAsState()
-    PullToRefreshBox(isRefreshing = running, onRefresh = { Collector.runNow(context) }, modifier = modifier.fillMaxSize()) {
+    // The pull indicator answers a pull; a round started any other way shows as the thin bar,
+    // which does not cover the list.
+    var pulled by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(running) { if (!running) pulled = false }
+    Column(modifier.fillMaxSize()) {
+    if (running && !pulled) {
+        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+    } else {
+        Spacer(Modifier.height(2.dp))
+    }
+    PullToRefreshBox(
+        isRefreshing = running && pulled,
+        onRefresh = { pulled = true; Collector.runNow(context) },
+        modifier = Modifier.fillMaxSize(),
+    ) {
         LazyColumn(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -125,7 +141,7 @@ fun OfficesScreen(modifier: Modifier, onOpen: (Office) -> Unit) {
                             Text(data?.state?.lastOk?.let { "${data.state.freeNow}" } ?: "–",
                                 fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
                             Text(
-                                data?.state?.nextFree?.let { "free · " + it.atZone(BERLIN).format(dayMonth) } ?: "free",
+                                "free",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -134,6 +150,7 @@ fun OfficesScreen(modifier: Modifier, onOpen: (Office) -> Unit) {
                 }
             }
         }
+    }
     }
 }
 
@@ -150,6 +167,7 @@ fun OfficeScreen(office: Office, modifier: Modifier) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        ReadStatus(data.state)
         BestChance(insight, data.watch)
         if (insight.byWeekday.values.any { it.known }) {
             BestTime(insight)
@@ -287,6 +305,24 @@ private fun FreeNow(days: List<FreeDay>) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${free.appointments}", fontWeight = FontWeight.SemiBold)
             }
+        }
+    }
+}
+
+@Composable
+private fun ReadStatus(state: OfficeState) {
+    val last = state.lastPoll ?: return
+    val good = state.lastOk
+    if (last.ok) return
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("⚠ Last read failed at ${clock(last.at)}", fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(last.error.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                good?.let { "Last good read ${it.at.atZone(BERLIN).format(dayMonth)}, ${clock(it.at)}" } ?: "No good read yet",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer,
+            )
         }
     }
 }
